@@ -29,16 +29,16 @@ class AsyncRetrier(Retrier):
             Defaults to `riprova.ConstantBackoff`.
         evaluator (function): optional evaluator function used to determine
             when an operation should be retried or not.
-            This allow the developer to retry operations that do not raised
+            This allows the developer to retry operations that do not raised
             any exception, for instance. Evaluator function accepts 1
             argument: the returned task result.
             Evaluator function can raise an exception, return an error or
             simply return `True` in order to retry the operation.
-            Otherwise the operation will be considered as valid and the
+            Otherwise, the operation will be considered as valid and the
             retry loop will end.
         error_evaluator (function|coroutinefunction): optional evaluator
             function used to determine when a task raised exception should
-            be proccesed as legit error and therefore retried or, otherwise,
+            be processed as legit error and therefore retried or, otherwise,
             treated as whitelist error, stopping the retry loop and re-raising
             the exception to the task consumer.
             This provides high versatility to developers in order to compose
@@ -46,7 +46,7 @@ class AsyncRetrier(Retrier):
             function that accepts 1 argument: the raised exception object.
             Evaluator function can raise an exception, return an error or
             simply return `True` in order to retry the operation.
-            Otherwise the operation will be considered as valid and the
+            Otherwise, the operation will be considered as valid and the
             retry loop will end.
         on_retry (function): optional function to call on before very retry
             operation. `on_retry` function accepts 2 arguments: `err, next_try`
@@ -115,16 +115,13 @@ class AsyncRetrier(Retrier):
                  evaluator=None,
                  error_evaluator=None,
                  on_retry=None,
-                 sleep_coro=None,
-                 loop=None):
+                 sleep_coro=None):
 
         # Assert input params
         if timeout is not None:
             assert isinstance(timeout, (int, float)), 'timeout must be number'
             assert timeout >= 0, 'timeout cannot be a negative number'
 
-        # Event loop to use
-        self.loop = loop or asyncio.get_event_loop()
         # Stores number of retry attempts
         self.attempts = 0
         # Stores latest error
@@ -148,12 +145,11 @@ class AsyncRetrier(Retrier):
                           AsyncRetrier.whitelist or
                           ErrorWhitelist())
 
-    @asyncio.coroutine
-    def _call(self, coro, *args, **kw):
+    async def _call(self, coro, *args, **kw):
         """
         Calls the given coroutine function with the given variadic arguments.
         """
-        res = yield from coro(*args, **kw)  # noqa (required for Python 2.x)
+        res = await coro(*args, **kw)  # noqa (required for Python 2.x)
 
         # If not evaluator function response is error
         if not self.evaluator or res is None:
@@ -164,7 +160,7 @@ class AsyncRetrier(Retrier):
 
         # Use custom result evaluator in order to determine if the
         # operation failed or not
-        err = yield from self.evaluator(res)
+        err = await self.evaluator(res)
         if not err:
             self.error = None
             return res
@@ -181,8 +177,7 @@ class AsyncRetrier(Retrier):
         # Otherwise simply return the error object
         return err
 
-    @asyncio.coroutine
-    def _handle_error(self, err):
+    async def _handle_error(self, err):
         """
         Handle execution error state and sleep the required amount of time.
         """
@@ -194,7 +189,7 @@ class AsyncRetrier(Retrier):
 
         # Evaluate if error is legit or should be retried
         if self.error_evaluator:
-            retry = yield from (asyncio.coroutine(self.error_evaluator)(err))
+            retry = await asyncio.coroutine(self.error_evaluator)(err)
 
         # If evalutor returns an error exception, just raise it
         if retry and isinstance(retry, Exception):
@@ -214,13 +209,12 @@ class AsyncRetrier(Retrier):
 
         # Notify retry subscriber, if needed
         if self.on_retry:
-            yield from self.on_retry(err, delay)
+            await self.on_retry(err, delay)
 
         # Sleep before the next try attempt
-        yield from self.sleep(delay)
+        await self.sleep(delay)
 
-    @asyncio.coroutine
-    def _run(self, coro, *args, **kw):
+    async def _run(self, coro, *args, **kw):
         """
         Runs coroutine in a error-safe infinitive loop until the
         operation succeed or the max retry attempts is reached.
@@ -229,7 +223,7 @@ class AsyncRetrier(Retrier):
 
         while True:
             try:
-                return (yield from self._call(coro, *args, **kw))
+                return await self._call(coro, *args, **kw)
 
             # Collect raised errors by cancelled futures
             except asyncio.CancelledError as _err:
@@ -237,7 +231,7 @@ class AsyncRetrier(Retrier):
 
             # Handle any other exception error
             except Exception as _err:
-                yield from self._handle_error(_err)
+                await self._handle_error(_err)
 
             # Increment number of retry attempts
             self.attempts += 1
@@ -246,8 +240,7 @@ class AsyncRetrier(Retrier):
             if err is not None:
                 raise err
 
-    @asyncio.coroutine
-    def run(self, coro, *args, **kw):
+    async def run(self, coro, *args, **kw):
         """
         Runs the given coroutine function in a retry loop until the operation
         is completed successfully or maximum retries attempts are reached.
@@ -276,16 +269,13 @@ class AsyncRetrier(Retrier):
         self.attempts = 0
 
         # If not timeout defined, run the coroutine function
-        return (yield from asyncio.wait_for(
+        return await asyncio.wait_for(
             self._run(coro, *args, **kw),
             self.timeout,
-            loop=self.loop
-        ))
+        )
 
-    @asyncio.coroutine
-    def __aenter__(self):
+    async def __aenter__(self):
         return self
 
-    @asyncio.coroutine
-    def __aexit__(self, exc_type, exc_value, traceback):
+    async def __aexit__(self, exc_type, exc_value, traceback):
         return self.__exit__(exc_type, exc_value, traceback)
